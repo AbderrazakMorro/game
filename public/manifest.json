@@ -1,0 +1,21 @@
+{
+    "name": "Mafia Online",
+    "short_name": "Mafia",
+    "description": "Un jeu de déduction sociale multijoueur en temps réel propulsé par Next.js 14, Supabase et Framer Motion.",
+    "start_url": "/",
+    "display": "standalone",
+    "background_color": "#020617",
+    "theme_color": "#020617",
+    "icons": [
+        {
+            "src": "/icon-192x192.png",
+            "sizes": "192x192",
+            "type": "image/png"
+        },
+        {
+            "src": "/icon-512x512.png",
+            "sizes": "512x512",
+            "type": "image/png"
+        }
+    ]
+}
