@@ -13,41 +13,74 @@ export default function Home() {
     const [joinCode, setJoinCode] = useState('')
 
     const createRoom = async () => {
-        setIsCreating(true)
+        try {
+            setIsCreating(true)
 
-        // Génère un code court de 6 caractères
-        const code = Math.random().toString(36).substring(2, 8).toUpperCase()
+            // Validate that we have Supabase initialized properly
+            const supa = getSupabase()
+            if (!process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY) {
+                alert("Erreur de configuration: NEXT_PUBLIC_SUPABASE_URL ou KEY manquante dans Vercel.")
+                setIsCreating(false)
+                return
+            }
 
-        const { data, error } = await getSupabase().from('rooms').insert([{
-            code,
-            status: 'lobby'
-        }]).select().single()
+            // Génère un code court de 6 caractères
+            const code = Math.random().toString(36).substring(2, 8).toUpperCase()
 
-        if (error) {
-            console.error("Erreur création room:", error)
+            const { data, error } = await supa.from('rooms').insert([{
+                code,
+                status: 'lobby'
+            }]).select().single()
+
+            if (error) {
+                console.error("Erreur création room:", error)
+                alert("Erreur Supabase: " + (error.message || JSON.stringify(error)))
+                setIsCreating(false)
+                return
+            }
+
+            if (!data || !data.id) {
+                alert("Erreur: aucune donnée retournée lors de la création.")
+                setIsCreating(false)
+                return
+            }
+
+            router.push(`/room/${data.id}`)
+        } catch (err) {
+            console.error("Exception lors de la création:", err)
+            alert("Exception interne: " + (err.message || err.toString()))
             setIsCreating(false)
-            return
         }
-
-        router.push(`/room/${data.id}`)
     }
 
     const joinRoom = async (e) => {
         e.preventDefault()
         if (!joinCode.trim()) return
 
-        const { data, error } = await getSupabase()
-            .from('rooms')
-            .select('id')
-            .eq('code', joinCode.toUpperCase())
-            .single()
+        try {
+            const supa = getSupabase()
+            if (!process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY) {
+                alert("Erreur de configuration: NEXT_PUBLIC_SUPABASE_URL ou KEY manquante dans Vercel.")
+                return
+            }
 
-        if (error || !data) {
-            alert("Code invalide ou salle introuvable.")
-            return
+            const { data, error } = await supa
+                .from('rooms')
+                .select('id')
+                .eq('code', joinCode.toUpperCase())
+                .single()
+
+            if (error || !data) {
+                console.error("Erreur joinRoom:", error)
+                alert("Code invalide ou salle introuvable. " + (error ? error.message : ""))
+                return
+            }
+
+            router.push(`/room/${data.id}`)
+        } catch (err) {
+            console.error("Exception lors de la connexion:", err)
+            alert("Exception interne: " + (err.message || err.toString()))
         }
-
-        router.push(`/room/${data.id}`)
     }
 
     return (
