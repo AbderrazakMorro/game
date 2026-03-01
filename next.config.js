@@ -17,6 +17,8 @@ const nextConfig = {
             { protocol: 'https', hostname: 'api.qrserver.com' },
         ],
     },
+    // next-pwa uses webpack, ignoring turbopack warning
+    turbopack: {}
 }
 
 module.exports = withPWA(nextConfig)

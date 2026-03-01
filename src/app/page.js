@@ -2,15 +2,37 @@
 
 export const dynamic = 'force-dynamic'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
-import { motion } from 'framer-motion'
+import { motion, AnimatePresence } from 'framer-motion'
 import { getSupabase } from '../lib/supabase'
 
 export default function Home() {
     const router = useRouter()
     const [isCreating, setIsCreating] = useState(false)
     const [joinCode, setJoinCode] = useState('')
+    const [deferredPrompt, setDeferredPrompt] = useState(null)
+    const [isInstallable, setIsInstallable] = useState(false)
+
+    useEffect(() => {
+        const handleBeforeInstallPrompt = (e) => {
+            e.preventDefault()
+            setDeferredPrompt(e)
+            setIsInstallable(true)
+        }
+        window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt)
+        return () => window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt)
+    }, [])
+
+    const handleInstallClick = async () => {
+        if (!deferredPrompt) return
+        deferredPrompt.prompt()
+        const { outcome } = await deferredPrompt.userChoice
+        if (outcome === 'accepted') {
+            setIsInstallable(false)
+        }
+        setDeferredPrompt(null)
+    }
 
     const createRoom = async () => {
         try {
@@ -183,6 +205,23 @@ export default function Home() {
                             Rejoindre la salle
                         </motion.button>
                     </form>
+
+                    {/* PWA Install Button */}
+                    <AnimatePresence>
+                        {isInstallable && (
+                            <motion.button
+                                initial={{ opacity: 0, height: 0, marginTop: 0 }}
+                                animate={{ opacity: 1, height: 'auto', marginTop: 8 }}
+                                exit={{ opacity: 0, height: 0, marginTop: 0 }}
+                                whileHover={{ scale: 1.02 }}
+                                whileTap={{ scale: 0.98 }}
+                                onClick={handleInstallClick}
+                                className="w-full bg-gradient-to-r from-emerald-600/80 to-teal-600/80 hover:from-emerald-500/90 hover:to-teal-500/90 border border-emerald-500/50 text-white font-bold py-4 rounded-2xl transition-all shadow-[0_0_15px_rgba(16,185,129,0.3)] flex items-center justify-center gap-2 uppercase tracking-widest text-sm backdrop-blur-md overflow-hidden relative"
+                            >
+                                <span className="text-xl">📱</span> Installer l'application
+                            </motion.button>
+                        )}
+                    </AnimatePresence>
                 </div>
             </motion.div>
         </main>
