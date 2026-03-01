@@ -1,55 +1,53 @@
 /**
- * Distribution des rôles pour le jeu Mafia.
+ * Mafia Game Logic — v2
  *
- * Règles FIXES :
- *  - 1 Docteur   : exactement 1, toujours présent
- *  - 1 Détective : exactement 1, toujours présent
- *  - Mafia       : floor(N / 3), minimum 1
- *                  → Garantit que (village + docteur + détective) > mafia
- *  - Villageois  : le reste
+ * Role distribution rules:
+ *  - Doctor   : always 1
+ *  - Detective : 1 if players >= 4, optional at 3 (included if present)
+ *  - Mafia    : floor(N / 3), minimum 1
+ *  - Villager : remainder
  *
- * Exemples :
- *  4 joueurs  → 1 Mafia, 1 Docteur, 1 Détective, 1 Villageois  (village=3 > mafia=1 ✓)
- *  5 joueurs  → 1 Mafia, 1 Docteur, 1 Détective, 2 Villageois  (village=4 > mafia=1 ✓)
- *  6 joueurs  → 2 Mafia, 1 Docteur, 1 Détective, 2 Villageois  (village=4 > mafia=2 ✓)
- *  9 joueurs  → 3 Mafia, 1 Docteur, 1 Détective, 4 Villageois  (village=6 > mafia=3 ✓)
- *
- * Minimum requis : 4 joueurs.
- *
- * @param {Array} players - Liste des joueurs [{id, username, ...}]
- * @returns {Array} - Joueurs avec role, is_alive, is_protected assignés
+ * Minimum: 3 players (1 Mafia + 1 Doctor + 1 Villager — no detective)
+ *           4+ players always get a detective
+ */
+
+/**
+ * Distribute roles randomly among players.
+ * @param {Array} players - [{id, username, ...}]
+ * @returns {Array} - players with role, is_alive, is_protected
  */
 export function distributeRoles(players) {
-    if (!players || players.length < 4) {
-        throw new Error(
-            'Il faut au moins 4 joueurs pour lancer une partie (1 Mafia + 1 Docteur + 1 Détective + 1 Villageois minimum).'
-        )
+    if (!players || players.length < 3) {
+        throw new Error('Il faut au minimum 3 joueurs pour lancer une partie.')
     }
 
     const N = players.length
     const mafiaCount = Math.max(1, Math.floor(N / 3))
+    const hasDetective = N >= 4
 
-    // Vérification de sécurité : le village doit toujours être majoritaire
-    if (N - mafiaCount <= mafiaCount) {
-        throw new Error(`Configuration invalide : ${mafiaCount} mafia contre ${N - mafiaCount} villageois.`)
+    // Validate: non-mafia must outnumber mafia
+    if ((N - mafiaCount) <= mafiaCount) {
+        throw new Error(`Configuration invalide : ${mafiaCount} mafia contre ${N - mafiaCount} non-mafia.`)
     }
 
-    // Construction de la liste des rôles
+    // Build role pool
+    const specialRoles = ['doctor']
+    if (hasDetective) specialRoles.push('detective')
+
+    const villagerCount = N - mafiaCount - specialRoles.length
     const roles = [
-        'doctor',     // exactement 1
-        'detective',  // exactement 1
-        ...Array(mafiaCount).fill('mafia'),               // 1 à N/3
-        ...Array(N - 2 - mafiaCount).fill('villager'),    // le reste
+        ...specialRoles,
+        ...Array(mafiaCount).fill('mafia'),
+        ...Array(Math.max(0, villagerCount)).fill('villager'),
     ]
 
-    // Mélange aléatoire (Fisher-Yates)
+    // Fisher-Yates shuffle on players
     const shuffled = [...players]
     for (let i = shuffled.length - 1; i > 0; i--) {
         const j = Math.floor(Math.random() * (i + 1))
             ;[shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]]
     }
-
-    // On mélange aussi les rôles pour éviter que docteur soit toujours au premier index
+    // Fisher-Yates shuffle on roles
     for (let i = roles.length - 1; i > 0; i--) {
         const j = Math.floor(Math.random() * (i + 1))
             ;[roles[i], roles[j]] = [roles[j], roles[i]]
@@ -60,13 +58,13 @@ export function distributeRoles(players) {
         role: roles[index],
         is_alive: true,
         is_protected: false,
+        is_ready: false,
     }))
 }
 
 /**
- * Calcule le nombre de mafia prévu pour N joueurs.
- * Utile pour afficher l'info dans le lobby.
- * @param {number} n - Nombre de joueurs
+ * Get the expected mafia count for N players.
+ * @param {number} n
  * @returns {number}
  */
 export function getMafiaCount(n) {
@@ -74,9 +72,9 @@ export function getMafiaCount(n) {
 }
 
 /**
- * Vérifie les conditions de victoire.
- * @param {Array} players - Tous les joueurs
- * @returns {'mafia'|'village'|null}
+ * Check win conditions.
+ * @param {Array} players - all players
+ * @returns {'mafia' | 'village' | null}
  */
 export function checkWinCondition(players) {
     const alive = players.filter(p => p.is_alive)
@@ -86,4 +84,110 @@ export function checkWinCondition(players) {
     if (aliveMafia.length === 0) return 'village'
     if (aliveMafia.length >= aliveVillage.length) return 'mafia'
     return null
+}
+
+/**
+ * Resolve all night actions.
+ * Order: Doctor protection → Mafia kill resolution → Detective check
+ *
+ * @param {Array} actions - actions for this phase: [{action_type, actor_id, target_id}]
+ * @param {Array} players - all players (with roles)
+ * @returns {{
+ *   eliminatedId: string|null,    // player eliminated tonight
+ *   savedId: string|null,         // player doctor saved (if kill was blocked)
+ *   detectiveResult: boolean|null, // true=mafia, false=not mafia. null if no detective
+ *   detectiveTargetId: string|null
+ * }}
+ */
+export function resolveNightActions(actions, players) {
+    const killAction = actions.find(a => a.action_type === 'kill')
+    const saveAction = actions.find(a => a.action_type === 'save')
+    const checkAction = actions.find(a => a.action_type === 'check')
+
+    const mafiaTargetId = killAction?.target_id || null
+    const doctorTargetId = saveAction?.target_id || null
+    const detectiveTargetId = checkAction?.target_id || null
+
+    // Doctor saves if their target matches mafia's target
+    const wasProtected = mafiaTargetId && doctorTargetId && mafiaTargetId === doctorTargetId
+
+    let eliminatedId = null
+    let savedId = null
+
+    if (mafiaTargetId) {
+        if (wasProtected) {
+            savedId = doctorTargetId
+        } else {
+            eliminatedId = mafiaTargetId
+        }
+    }
+
+    // Detective result
+    let detectiveResult = null
+    if (detectiveTargetId) {
+        const target = players.find(p => p.id === detectiveTargetId)
+        detectiveResult = target ? target.role === 'mafia' : false
+    }
+
+    return {
+        eliminatedId,
+        savedId,
+        detectiveResult,
+        detectiveTargetId,
+    }
+}
+
+/**
+ * Tally votes and find who should be eliminated.
+ * The player with the MOST votes is eliminated.
+ * Ties result in no elimination (null).
+ *
+ * @param {Array} votes - actions with action_type='vote': [{target_id}]
+ * @returns {string|null} - id of eliminated player, or null if tie
+ */
+export function tallyVotes(votes) {
+    if (!votes || votes.length === 0) return null
+
+    const counts = {}
+    for (const v of votes) {
+        counts[v.target_id] = (counts[v.target_id] || 0) + 1
+    }
+
+    let maxVotes = 0
+    let winner = null
+    let tied = false
+
+    for (const [id, count] of Object.entries(counts)) {
+        if (count > maxVotes) {
+            maxVotes = count
+            winner = id
+            tied = false
+        } else if (count === maxVotes) {
+            tied = true
+        }
+    }
+
+    return tied ? null : winner
+}
+
+/**
+ * Determine the next phase after the current one.
+ * Returns null if the game should check for win condition.
+ *
+ * @param {string} currentPhase
+ * @param {Array} players - alive players (to check if detective exists)
+ * @returns {string}
+ */
+export function getNextPhase(currentPhase, players) {
+    const aliveDetective = players.find(p => p.is_alive && p.role === 'detective')
+
+    switch (currentPhase) {
+        case 'roles': return 'night_mafia'
+        case 'night_mafia': return 'night_doctor'
+        case 'night_doctor': return aliveDetective ? 'night_detective' : 'day_discussion'
+        case 'night_detective': return 'day_discussion'
+        case 'day_discussion': return 'day_vote'
+        case 'day_vote': return 'night_mafia'
+        default: return 'lobby'
+    }
 }

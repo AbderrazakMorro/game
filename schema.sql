@@ -1,38 +1,63 @@
--- Schema Supabase Mafia Online
+-- Schema Supabase Mafia Online (v2)
 
 -- 1. Table Rooms
-CREATE TABLE rooms (
+CREATE TABLE IF NOT EXISTS rooms (
   id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
   created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
   code TEXT NOT NULL UNIQUE,
-  status TEXT NOT NULL DEFAULT 'lobby', -- lobby, roles, night_mafia, night_doctor, night_detective, day_discussion, day_vote
-  host_id TEXT
+  status TEXT NOT NULL DEFAULT 'lobby', -- lobby | roles | night_mafia | night_doctor | night_detective | day_discussion | day_vote | game_over
+  host_id TEXT,
+  phase_number INTEGER NOT NULL DEFAULT 0, -- increments each full night+day cycle
+  winner TEXT -- 'mafia' | 'village' | NULL
 );
 
 -- 2. Table Players
-CREATE TABLE players (
+CREATE TABLE IF NOT EXISTS players (
   id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
   created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
   room_id UUID REFERENCES rooms(id) ON DELETE CASCADE,
   user_id TEXT NOT NULL,
   username TEXT NOT NULL,
   avatar_url TEXT,
-  role TEXT, -- mafia, doctor, detective, villager
+  role TEXT, -- mafia | doctor | detective | villager
   is_alive BOOLEAN DEFAULT true,
-  is_protected BOOLEAN DEFAULT false
+  is_protected BOOLEAN DEFAULT false,
+  is_ready BOOLEAN DEFAULT false -- used in 'roles' phase acknowledgement
 );
 
--- 3. Table Actions (pour le vote et la nuit)
-CREATE TABLE actions (
+-- 3. Table Actions (night actions + day votes)
+CREATE TABLE IF NOT EXISTS actions (
   id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
   created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
   room_id UUID REFERENCES rooms(id) ON DELETE CASCADE,
   phase_number INTEGER NOT NULL,
-  action_type TEXT NOT NULL, -- kill, save, check, vote
+  action_type TEXT NOT NULL, -- kill | save | check | vote
+  actor_id UUID REFERENCES players(id) ON DELETE CASCADE,
   target_id UUID REFERENCES players(id) ON DELETE CASCADE
+);
+
+-- 4. Table Game Events (broadcast announcements to all players)
+CREATE TABLE IF NOT EXISTS game_events (
+  id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
+  room_id UUID REFERENCES rooms(id) ON DELETE CASCADE,
+  phase_number INTEGER NOT NULL,
+  event_type TEXT NOT NULL, -- night_result | day_result | detective_result | game_over
+  payload JSONB NOT NULL DEFAULT '{}'  -- flexible data: { eliminated, saved, winner, executedRole, detectiveResult }
+);
+
+-- 5. Table Chat Messages (pour le chat en direct)
+CREATE TABLE IF NOT EXISTS chat_messages (
+  id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
+  room_id UUID REFERENCES rooms(id) ON DELETE CASCADE,
+  player_id TEXT NOT NULL,
+  content TEXT NOT NULL
 );
 
 -- Activation de Realtime
 ALTER PUBLICATION supabase_realtime ADD TABLE rooms;
 ALTER PUBLICATION supabase_realtime ADD TABLE players;
 ALTER PUBLICATION supabase_realtime ADD TABLE actions;
+ALTER PUBLICATION supabase_realtime ADD TABLE game_events;
+ALTER PUBLICATION supabase_realtime ADD TABLE chat_messages;

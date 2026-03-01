@@ -1,3 +1,5 @@
+export const dynamic = 'force-dynamic'
+
 import GameRoom from '../../../components/GameRoom'
 
 export default async function RoomPage({ params }) {

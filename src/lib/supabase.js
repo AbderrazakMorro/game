@@ -1,9 +1,20 @@
 import { createClient } from '@supabase/supabase-js'
 
-// Les URL et clés doivent être définies dans les variables d'environnement (.env.local)
-// NEXT_PUBLIC_SUPABASE_URL=...
-// NEXT_PUBLIC_SUPABASE_ANON_KEY=...
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || ''
-const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || ''
+// Lazy singleton — created on first use to avoid build-time errors
+let _client = null
 
-export const supabase = createClient(supabaseUrl, supabaseAnonKey)
+export function getSupabase() {
+    if (!_client) {
+        const url = process.env.NEXT_PUBLIC_SUPABASE_URL || ''
+        const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || ''
+        _client = createClient(url, key)
+    }
+    return _client
+}
+
+// Keep backward compat: supabase is a proxy that delegates to the lazy client
+export const supabase = new Proxy({}, {
+    get(_, prop) {
+        return getSupabase()[prop]
+    },
+})
