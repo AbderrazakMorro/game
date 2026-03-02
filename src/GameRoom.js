@@ -1,6 +1,6 @@
 'use client'
 
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useCallback } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { supabase } from '../lib/supabase'
 import { distributeRoles } from '../utils/gameLogic'
@@ -165,10 +165,9 @@ const NightOverlay = ({ playerRole, players, currentPhase, currentUserId, onActi
         }
     }
 
-    // Filtrer les cibles valides (vivants)
     const validTargets = players.filter(p => {
         if (!p.is_alive) return false
-        if (playerRole === 'mafia' && p.role === 'mafia') return false // La mafia ne se tue pas elle-même en principe
+        if (playerRole === 'mafia' && p.role === 'mafia') return false
         return true
     })
 
@@ -192,8 +191,8 @@ const NightOverlay = ({ playerRole, players, currentPhase, currentUserId, onActi
                                     key={p.id}
                                     onClick={() => setSelectedTarget(p.id)}
                                     className={`p-4 rounded-lg border transition-all ${selectedTarget === p.id
-                                            ? 'bg-red-900/40 border-red-600 text-white shadow-[0_0_15px_rgba(220,38,38,0.3)]'
-                                            : 'bg-slate-900 border-slate-800 hover:border-slate-600 text-slate-400'
+                                        ? 'bg-red-900/40 border-red-600 text-white shadow-[0_0_15px_rgba(220,38,38,0.3)]'
+                                        : 'bg-slate-900 border-slate-800 hover:border-slate-600 text-slate-400'
                                         }`}
                                 >
                                     {p.username} {p.user_id === currentUserId && "(Vous)"}
@@ -225,12 +224,79 @@ const NightOverlay = ({ playerRole, players, currentPhase, currentUserId, onActi
 }
 
 // ==========================================
-// COMPOSANT 4 : VotingSystem (Jour)
+// COMPOSANT 4 : NightResultAnnouncement
 // ==========================================
-const VotingSystem = ({ players, currentUserId, onVote, hasVoted }) => {
+const NightResultAnnouncement = ({ event, onDismiss }) => {
+    const { eliminated, saved } = event?.payload || {}
+    return (
+        <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4"
+        >
+            <motion.div
+                initial={{ scale: 0.85, y: 30 }}
+                animate={{ scale: 1, y: 0 }}
+                className="bg-slate-900 border border-slate-700 rounded-2xl p-8 max-w-sm w-full text-center shadow-2xl"
+            >
+                <div className="text-5xl mb-4">{eliminated ? '💀' : '🌅'}</div>
+                <h2 className="text-2xl font-serif uppercase tracking-widest text-white mb-3">
+                    {eliminated ? 'Un citoyen est tombé' : 'La nuit fut calme'}
+                </h2>
+                {eliminated ? (
+                    <p className="text-slate-400 text-sm leading-relaxed">
+                        <span className="text-white font-semibold">{eliminated.username}</span> a été éliminé cette nuit.
+                        {' '}C'était un·e{' '}
+                        <span className={
+                            eliminated.role === 'mafia' ? 'text-red-500 font-bold' :
+                                eliminated.role === 'doctor' ? 'text-emerald-400 font-bold' :
+                                    eliminated.role === 'detective' ? 'text-blue-400 font-bold' :
+                                        'text-slate-300 font-bold'
+                        }>
+                            {eliminated.role === 'mafia' ? 'Mafia' :
+                                eliminated.role === 'doctor' ? 'Docteur' :
+                                    eliminated.role === 'detective' ? 'Détective' : 'Villageois'}
+                        </span>.
+                    </p>
+                ) : (
+                    <p className="text-slate-400 text-sm">
+                        {saved
+                            ? 'Le Docteur a sauvé une vie cette nuit. Personne n\'est mort.'
+                            : 'Personne n\'a été éliminé cette nuit.'}
+                    </p>
+                )}
+                <button
+                    onClick={onDismiss}
+                    className="mt-8 w-full bg-slate-800 hover:bg-slate-700 border border-slate-700 text-white font-semibold py-3 rounded-lg transition-colors uppercase tracking-wide text-sm"
+                >
+                    Continuer
+                </button>
+            </motion.div>
+        </motion.div>
+    )
+}
+
+// ==========================================
+// COMPOSANT 5 : VotingSystem (Jour)
+// ==========================================
+const VotingSystem = ({ players, currentUserId, onVote, hasVoted, revoteCandidates, voteCounts }) => {
     const [selectedTarget, setSelectedTarget] = useState(null)
+    const isRevote = revoteCandidates && revoteCandidates.length > 0
 
     const livingPlayers = players.filter(p => p.is_alive)
+
+    // During revote, show only the tied candidates; otherwise show all living players
+    const eligibleCandidates = isRevote
+        ? livingPlayers.filter(p => revoteCandidates.includes(p.id))
+        : livingPlayers
+
+    // Reset selection when revote candidates change
+    useEffect(() => {
+        setSelectedTarget(null)
+    }, [revoteCandidates])
+
+    const totalVotes = Object.values(voteCounts || {}).reduce((a, b) => a + b, 0)
 
     return (
         <div className="flex flex-col items-center justify-center min-h-screen bg-slate-900 text-slate-200 p-4 transition-colors duration-1000">
@@ -242,23 +308,74 @@ const VotingSystem = ({ players, currentUserId, onVote, hasVoted }) => {
                 <div className="flex justify-center mb-6">
                     <span className="text-6xl text-yellow-600 drop-shadow-[0_0_15px_rgba(202,138,4,0.5)] cursor-default">☀️</span>
                 </div>
-                <h2 className="text-3xl font-serif text-white mb-2 text-center uppercase tracking-widest font-bold">Jour de Jugement</h2>
-                <p className="text-center text-slate-400 mb-8 italic text-sm">Débattez et votez pour éliminer un suspect.</p>
+
+                {/* Revote banner */}
+                <AnimatePresence>
+                    {isRevote && (
+                        <motion.div
+                            key="revote-banner"
+                            initial={{ opacity: 0, y: -10 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            exit={{ opacity: 0, y: -10 }}
+                            className="mb-6 flex items-center justify-center gap-2 bg-red-950/60 border border-red-800/60 rounded-lg px-4 py-3 shadow-[0_0_20px_rgba(220,38,38,0.15)]"
+                        >
+                            <span className="text-xl">⚖️</span>
+                            <p className="text-red-400 font-bold uppercase tracking-widest text-sm">
+                                Revote — Égalité !
+                            </p>
+                        </motion.div>
+                    )}
+                </AnimatePresence>
+
+                <h2 className="text-3xl font-serif text-white mb-2 text-center uppercase tracking-widest font-bold">
+                    {isRevote ? 'Nouveau Vote' : 'Jour de Jugement'}
+                </h2>
+                <p className="text-center text-slate-400 mb-8 italic text-sm">
+                    {isRevote
+                        ? 'Égalité ! Votez à nouveau parmi les candidats ci-dessous.'
+                        : 'Débattez et votez pour éliminer un suspect.'}
+                </p>
 
                 {hasVoted ? (
-                    <div className="text-center py-12 text-slate-500 italic font-serif">
-                        Votre vote public a été enregistré. En attente de l'unanimité collective...
+                    <div className="text-center py-8 text-slate-500 italic font-serif">
+                        <p>Votre vote a été enregistré.</p>
+                        <p className="text-sm mt-2">En attente des autres joueurs...</p>
+                        {/* Live vote tally */}
+                        {eligibleCandidates.length > 0 && totalVotes > 0 && (
+                            <div className="mt-6 space-y-3 text-left not-italic">
+                                {eligibleCandidates.map(p => {
+                                    const count = voteCounts?.[p.id] || 0
+                                    const pct = totalVotes > 0 ? Math.round((count / totalVotes) * 100) : 0
+                                    return (
+                                        <div key={p.id}>
+                                            <div className="flex justify-between text-xs text-slate-500 mb-1">
+                                                <span className="text-slate-300">{p.username}</span>
+                                                <span>{count} vote{count !== 1 ? 's' : ''}</span>
+                                            </div>
+                                            <div className="w-full h-1.5 bg-slate-800 rounded-full overflow-hidden">
+                                                <motion.div
+                                                    className="h-full bg-yellow-700 rounded-full"
+                                                    initial={{ width: 0 }}
+                                                    animate={{ width: `${pct}%` }}
+                                                    transition={{ duration: 0.4 }}
+                                                />
+                                            </div>
+                                        </div>
+                                    )
+                                })}
+                            </div>
+                        )}
                     </div>
                 ) : (
                     <>
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-8">
-                            {livingPlayers.map(p => (
+                            {eligibleCandidates.map(p => (
                                 <button
                                     key={p.id}
                                     onClick={() => setSelectedTarget(p.id)}
                                     className={`flex items-center justify-center p-4 rounded-lg border transition-all ${selectedTarget === p.id
-                                            ? 'bg-slate-800 border-yellow-600 text-white shadow-[0_0_15px_rgba(202,138,4,0.3)]'
-                                            : 'bg-slate-950 border-slate-800 hover:border-slate-700'
+                                        ? 'bg-slate-800 border-yellow-600 text-white shadow-[0_0_15px_rgba(202,138,4,0.3)]'
+                                        : 'bg-slate-950 border-slate-800 hover:border-slate-700'
                                         }`}
                                 >
                                     <span className="font-medium">{p.username} {p.user_id === currentUserId && "(C'est vous)"}</span>
@@ -271,10 +388,37 @@ const VotingSystem = ({ players, currentUserId, onVote, hasVoted }) => {
                             disabled={!selectedTarget}
                             className="w-full bg-yellow-700 hover:bg-yellow-600 text-white font-bold py-4 rounded-lg transition-colors border border-yellow-800 hover:border-yellow-500 disabled:opacity-50 uppercase tracking-wide shadow-lg"
                         >
-                            Voter pour l'exécution
+                            {isRevote ? 'Confirmer le revote' : 'Voter pour l\'exécution'}
                         </button>
                     </>
                 )}
+            </motion.div>
+        </div>
+    )
+}
+
+// ==========================================
+// COMPOSANT 6 : GameOverScreen
+// ==========================================
+const GameOverScreen = ({ winner }) => {
+    const isVillageWin = winner === 'village'
+    return (
+        <div className={`flex flex-col items-center justify-center min-h-screen p-4 ${isVillageWin ? 'bg-slate-800' : 'bg-red-950'}`}>
+            <motion.div
+                initial={{ scale: 0.7, opacity: 0 }}
+                animate={{ scale: 1, opacity: 1 }}
+                transition={{ type: 'spring', damping: 15 }}
+                className="text-center"
+            >
+                <div className="text-8xl mb-6">{isVillageWin ? '🏘️' : '🔪'}</div>
+                <h1 className="text-5xl font-serif font-bold uppercase tracking-widest mb-4 text-white">
+                    {isVillageWin ? 'Village Vainqueur' : 'La Mafia Gagne'}
+                </h1>
+                <p className="text-slate-300 italic text-lg">
+                    {isVillageWin
+                        ? 'La Mafia a été démasquée. La paix règne à nouveau.'
+                        : 'La Mafia contrôle la ville. Les honnêtes gens ont perdu.'}
+                </p>
             </motion.div>
         </div>
     )
@@ -287,40 +431,45 @@ export default function GameRoom({ roomId }) {
     const [me, setMe] = useState(null)
     const [room, setRoom] = useState(null)
     const [players, setPlayers] = useState([])
-    const [phase, setPhase] = useState('lobby') // lobby, roles, night_mafia, night_doctor, night_detective, day_discussion, day_vote
+    const [phase, setPhase] = useState('lobby')
     const [roleAcknowledged, setRoleAcknowledged] = useState(false)
     const [hasVotedOrActed, setHasVotedOrActed] = useState(false)
+
+    // Revote state (driven by room.revote_candidates in real-time)
+    const [revoteCandidates, setRevoteCandidates] = useState(null)
+    // Live vote tallies for the current round
+    const [voteCounts, setVoteCounts] = useState({})
+    // Night result event to show as announcement
+    const [nightResultEvent, setNightResultEvent] = useState(null)
 
     // 1. Initialisation et souscription au canal Supabase
     useEffect(() => {
         if (!roomId) return
 
         const fetchInitialData = async () => {
-            // Récupération de la Room (lobby)
             const { data: roomData } = await supabase.from('rooms').select('*').eq('id', roomId).single()
             if (roomData) {
                 setRoom(roomData)
                 setPhase(roomData.status)
+                setRevoteCandidates(roomData.revote_candidates || null)
             }
 
-            // Récupération des Joueurs existants
             const { data: playersData } = await supabase.from('players').select('*').eq('room_id', roomId).order('created_at', { ascending: true })
-            if (playersData) {
-                setPlayers(playersData)
-            }
+            if (playersData) setPlayers(playersData)
         }
 
         fetchInitialData()
 
-        // Configuration Supabase Realtime avec supabase.channel()
         const channel = supabase.channel(`game_room_${roomId}`)
-            // Écoute des changements d'état de la salle (passage jour/nuit)
+            // Room status changes (phase transitions, revote_candidates updates)
             .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'rooms', filter: `id=eq.${roomId}` }, (payload) => {
                 setRoom(payload.new)
                 setPhase(payload.new.status)
-                setHasVotedOrActed(false) // On permet de voter/agir à nouveau
+                setHasVotedOrActed(false)
+                setRevoteCandidates(payload.new.revote_candidates || null)
+                setVoteCounts({})
             })
-            // Écoute de l'entrée/sortie/décès des joueurs
+            // Player updates (deaths, etc.)
             .on('postgres_changes', { event: '*', schema: 'public', table: 'players', filter: `room_id=eq.${roomId}` }, (payload) => {
                 setPlayers(prev => {
                     if (payload.eventType === 'INSERT') return [...prev, payload.new]
@@ -328,27 +477,41 @@ export default function GameRoom({ roomId }) {
                     if (payload.eventType === 'DELETE') return prev.filter(p => p.id !== payload.old.id)
                     return prev
                 })
-
-                // Met à jour l'instance locale 'me' si je suis affecté
                 if (me && payload.new && payload.new.user_id === me.user_id) {
                     setMe(payload.new)
                 }
             })
+            // Game events (night_result, day_result, revote, game_over)
+            .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'game_events', filter: `room_id=eq.${roomId}` }, (payload) => {
+                const event = payload.new
+                if (event.event_type === 'night_result') {
+                    setNightResultEvent(event)
+                }
+                if (event.event_type === 'revote' && event.payload?.voteCounts) {
+                    setVoteCounts(event.payload.voteCounts)
+                }
+                if (event.event_type === 'day_result' && event.payload?.voteCounts) {
+                    setVoteCounts(event.payload.voteCounts)
+                }
+            })
+            // Live vote tally: listen to new action inserts during day_vote
+            .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'actions', filter: `room_id=eq.${roomId}` }, (payload) => {
+                if (payload.new.action_type === 'vote') {
+                    setVoteCounts(prev => ({
+                        ...prev,
+                        [payload.new.target_id]: (prev[payload.new.target_id] || 0) + 1,
+                    }))
+                }
+            })
             .subscribe()
 
-        return () => {
-            supabase.removeChannel(channel)
-        }
+        return () => { supabase.removeChannel(channel) }
     }, [roomId])
-    // on omet intentionnellement `me` pour éviter des resubscriptions, 
-    // la synchonisation se fait via setPlayers/setMe dans les callbacks.
 
-    // 2. Rejoindre la salle (Création ou rattachement)
+    // 2. Rejoindre la salle
     const handleJoinLobby = async (username) => {
-        // Note: Dans une app complète, on utilise supabase.auth.getUser() pour l'user_id
         const mockUserId = 'user_' + Math.random().toString(36).substr(2, 9)
 
-        // Le premier arrivé devient tacitement l'hôte si la room n'en a pas
         if (players.length === 0 && room && !room.host_id) {
             await supabase.from('rooms').update({ host_id: mockUserId }).eq('id', roomId)
         }
@@ -365,53 +528,63 @@ export default function GameRoom({ roomId }) {
         if (data) setMe(data)
     }
 
-    // 3. Démarrer la partie (Assigne les rôles et passe à la phase 'roles')
+    // 3. Démarrer la partie
     const handleStartGame = async () => {
         const assignedPlayers = distributeRoles(players)
-
-        // En production: On fait une Bulk Update ou une Edge Function
         for (const p of assignedPlayers) {
             await supabase.from('players').update({ role: p.role }).eq('id', p.id)
         }
-
-        // Change l'état de la salle et avertit tout le monde via Realtime
         await supabase.from('rooms').update({ status: 'roles' }).eq('id', roomId)
     }
 
-    // 4. Inscription de l'action en BDD
-    const handleAction = async (targetId) => {
+    // 4. Action nocturne (direct Supabase insert — server-side processing via night-action API)
+    const handleNightAction = async (targetId) => {
         setHasVotedOrActed(true)
 
-        let actionType = 'vote' // Défaut (Jour)
+        let actionType = 'vote'
         if (phase.startsWith('night')) {
             if (me.role === 'mafia') actionType = 'kill'
             else if (me.role === 'doctor') actionType = 'save'
             else if (me.role === 'detective') actionType = 'check'
         }
 
-        await supabase.from('actions').insert([{
-            room_id: roomId,
-            phase_number: 1, // Devrait s'incrémenter par cycle dans la logique serveur
-            action_type: actionType,
-            target_id: targetId
-            // L'actor_id est généralement important mais nous l'avons omis car non présent dans le schéma SQL fourni
-        }])
-
-        // La transition automatique vers la phase suivante si "Le vote doit être unanime..."
-        // devrait être traitée nativement par un trigger PostgreSQL ou une Edge Function 
-        // qui surveille la table 'actions'.
+        await fetch('/api/game/night-action', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ roomId, actorId: me.id, targetId, actionType }),
+        })
     }
+
+    // 5. Vote de jour — appel API (gestion des égalités côté serveur)
+    const handleVote = useCallback(async (targetId) => {
+        setHasVotedOrActed(true)
+        try {
+            await fetch('/api/game/vote', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ roomId, actorId: me.id, targetId }),
+            })
+        } catch (err) {
+            console.error('[handleVote]', err)
+            setHasVotedOrActed(false)
+        }
+    }, [roomId, me])
 
     // ==========================
     // Rendu par machine à état
     // ==========================
 
-    // Écran d'accueil - AvatarSelector (Avant rejoindre)
+    // Écran de fin de partie
+    if (phase === 'game_over') {
+        return <GameOverScreen winner={room?.winner} />
+    }
+
+    // Écran d'accueil — AvatarSelector (Avant rejoindre)
     if (!me) {
         return <AvatarSelector onJoin={handleJoinLobby} />
     }
 
-    // Lobby - AvatarSelector (En attente)
+    // Lobby — AvatarSelector (En attente)
     if (phase === 'lobby') {
         return <AvatarSelector
             players={players}
@@ -420,7 +593,7 @@ export default function GameRoom({ roomId }) {
         />
     }
 
-    // Phase Roles - RoleReveal
+    // Phase Roles — RoleReveal
     if (phase === 'roles') {
         if (!roleAcknowledged) {
             return <RoleReveal role={me.role} onAcknowledge={() => setRoleAcknowledged(true)} />
@@ -433,7 +606,7 @@ export default function GameRoom({ roomId }) {
         )
     }
 
-    // État du Joueur s'il est Mort (applicable à toutes les phases post-lobby)
+    // État du Joueur s'il est Mort
     if (!me.is_alive) {
         return (
             <div className="min-h-screen bg-black flex flex-col items-center justify-center text-slate-500 font-serif">
@@ -444,26 +617,62 @@ export default function GameRoom({ roomId }) {
                     Phase en cours : {phase.replace('_', ' ')}
                 </p>
             </div>
-        ) // Le fantôme pourrait voir le chat plus tard, mais ne peut pas agir
+        )
     }
 
-    // Phase Nuit - NightOverlay
+    // Phase Nuit — NightOverlay
     if (phase.startsWith('night')) {
-        if (hasVotedOrActed && phase !== 'night_detective') { // Afficher l'attente sauf si fin de config
+        if (hasVotedOrActed) {
             return (
                 <div className="min-h-screen bg-black flex flex-col items-center justify-center text-slate-600 italic font-serif text-center px-4">
                     <p>Votre action est enregistrée. La nuit poursuit son cours, dans l'ombre...</p>
                 </div>
             )
         }
-        return <NightOverlay playerRole={me.role} players={players} currentPhase={phase} currentUserId={me.user_id} onAction={handleAction} />
+        return <NightOverlay playerRole={me.role} players={players} currentPhase={phase} currentUserId={me.user_id} onAction={handleNightAction} />
     }
 
-    // Phase Jour / Vote - VotingSystem
-    if (phase === 'day_discussion' || phase === 'day_vote') {
-        // Le "Day Discussion" contiendrait normalement un Chat de groupe.
-        // Pour l'intégration, l'interface du "Vote" est requise.
-        return <VotingSystem players={players} currentUserId={me.user_id} onVote={handleAction} hasVoted={hasVotedOrActed} />
+    // Phase Jour / Discussion
+    if (phase === 'day_discussion') {
+        return (
+            <>
+                {/* Night result announcement modal */}
+                <AnimatePresence>
+                    {nightResultEvent && (
+                        <NightResultAnnouncement event={nightResultEvent} onDismiss={() => setNightResultEvent(null)} />
+                    )}
+                </AnimatePresence>
+                <VotingSystem
+                    players={players}
+                    currentUserId={me.user_id}
+                    onVote={handleVote}
+                    hasVoted={hasVotedOrActed}
+                    revoteCandidates={revoteCandidates}
+                    voteCounts={voteCounts}
+                />
+            </>
+        )
+    }
+
+    // Phase Vote
+    if (phase === 'day_vote') {
+        return (
+            <>
+                <AnimatePresence>
+                    {nightResultEvent && (
+                        <NightResultAnnouncement event={nightResultEvent} onDismiss={() => setNightResultEvent(null)} />
+                    )}
+                </AnimatePresence>
+                <VotingSystem
+                    players={players}
+                    currentUserId={me.user_id}
+                    onVote={handleVote}
+                    hasVoted={hasVotedOrActed}
+                    revoteCandidates={revoteCandidates}
+                    voteCounts={voteCounts}
+                />
+            </>
+        )
     }
 
     // Sécurité (Fallback par défaut)

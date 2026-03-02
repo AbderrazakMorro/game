@@ -411,10 +411,21 @@ const NightOverlay = ({ playerRole, players, currentPhase, currentUserId, onActi
 // ─────────────────────────────────────────────
 // DAY PHASE (Announcement + Voting)
 // ─────────────────────────────────────────────
-const DayPhase = ({ players, currentUserId, onVote, phase, events, playerRole, detectiveOwnResult }) => {
+const DayPhase = ({ players, currentUserId, onVote, phase, events, playerRole, detectiveOwnResult, room, voteCounts }) => {
     const [selectedTarget, setSelectedTarget] = useState(null)
     const [voted, setVoted] = useState(false)
     const living = players.filter(p => p.is_alive)
+
+    const isRevote = room?.revote_candidates && room.revote_candidates.length > 0
+    const eligibleCandidates = isRevote
+        ? living.filter(p => room.revote_candidates.includes(p.id))
+        : living
+
+    // Reset selection when revote candidates change
+    useEffect(() => {
+        setSelectedTarget(null)
+        setVoted(false)
+    }, [room?.revote_candidates])
 
     // Latest night result event
     const nightResult = [...events].reverse().find(e => e.event_type === 'night_result')
@@ -474,6 +485,13 @@ const DayPhase = ({ players, currentUserId, onVote, phase, events, playerRole, d
                 <div className="bg-white/5 backdrop-blur-3xl p-8 rounded-[2rem] border border-white/20 shadow-[0_8px_32px_0_rgba(0,0,0,0.36)] relative overflow-hidden">
                     <div className="absolute inset-0 bg-gradient-to-b from-white/5 to-transparent pointer-events-none" />
                     <div className="text-7xl text-center mb-6 relative z-10 drop-shadow-[0_0_20px_rgba(250,204,21,0.5)]">☀️</div>
+                    {isRevote && (
+                        <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} className="mb-8 p-4 bg-red-500/20 border border-red-500 rounded-xl text-center relative z-10 shadow-[0_0_20px_rgba(239,68,68,0.3)]">
+                            <span className="animate-pulse text-red-500 text-2xl drop-shadow-md">⚖️</span>
+                            <h3 className="text-red-400 font-bold uppercase tracking-widest mt-2">Revote — Égalité !</h3>
+                            <p className="text-red-300/70 text-sm mt-1">Vous ne pouvez voter que pour les joueurs a égalité.</p>
+                        </motion.div>
+                    )}
                     <h2 className="text-4xl font-black text-transparent bg-clip-text bg-gradient-to-br from-yellow-300 to-orange-500 text-center uppercase tracking-tighter mb-2 relative z-10 drop-shadow-lg">
                         {phase === 'day_discussion' ? 'Débat Public' : 'Le Jugement'}
                     </h2>
@@ -491,26 +509,49 @@ const DayPhase = ({ players, currentUserId, onVote, phase, events, playerRole, d
                     ) : (
                         <div className="relative z-10">
                             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-8">
-                                {living.map(p => (
-                                    <motion.button key={p.id} whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.97 }}
-                                        onClick={() => setSelectedTarget(p.id)}
-                                        className={`flex items-center gap-4 px-5 py-4 rounded-xl border-2 transition-all ${selectedTarget === p.id
-                                            ? 'border-yellow-500 bg-yellow-500/20 text-white shadow-[0_0_15px_rgba(234,179,8,0.3)]'
-                                            : 'border-white/10 bg-black/40 text-slate-300 hover:border-white/30 hover:bg-white/5'}`}
-                                    >
-                                        <div className={`w-10 h-10 rounded-full flex items-center justify-center text-base font-black shadow-inner ${selectedTarget === p.id ? 'bg-gradient-to-br from-yellow-400 to-orange-500 text-white' : 'bg-slate-800 text-yellow-500/70'}`}>
-                                            {p.username[0].toUpperCase()}
-                                        </div>
-                                        <span className="font-bold text-base">{p.username}</span>
-                                        {p.user_id === currentUserId && <span className="ml-auto text-[10px] uppercase font-bold text-white/40 tracking-widest bg-white/5 px-2 py-1 rounded-full">Vous</span>}
-                                    </motion.button>
-                                ))}
+                                {eligibleCandidates.map(p => {
+                                    const count = voteCounts?.[p.id] || 0
+                                    const isSelected = selectedTarget === p.id
+                                    const isSelf = p.user_id === currentUserId
+
+                                    return (
+                                        <motion.button key={p.id} whileHover={!isSelf ? { scale: 1.02 } : {}} whileTap={!isSelf ? { scale: 0.97 } : {}}
+                                            onClick={() => !isSelf && setSelectedTarget(p.id)}
+                                            disabled={isSelf}
+                                            className={`flex flex-col gap-2 px-5 py-4 rounded-xl border-2 transition-all overflow-hidden relative ${isSelf ? 'opacity-50 cursor-not-allowed border-white/5 bg-black/40 text-slate-500' : isSelected
+                                                ? 'border-yellow-500 bg-yellow-500/20 text-white shadow-[0_0_15px_rgba(234,179,8,0.3)]'
+                                                : 'border-white/10 bg-black/40 text-slate-300 hover:border-white/30 hover:bg-white/5'}`}
+                                        >
+                                            <div className="flex w-full items-center gap-4 relative z-10">
+                                                <div className={`w-10 h-10 rounded-full flex items-center justify-center text-base font-black shadow-inner shrink-0 ${isSelected ? 'bg-gradient-to-br from-yellow-400 to-orange-500 text-white' : 'bg-slate-800 text-yellow-500/70'}`}>
+                                                    {p.username[0].toUpperCase()}
+                                                </div>
+                                                <span className="font-bold text-base truncate flex-1 text-left">{p.username}</span>
+                                                {p.user_id === currentUserId && <span className="ml-auto text-[10px] uppercase font-bold text-white/40 tracking-widest bg-white/5 px-2 py-1 rounded-full shrink-0">Vous</span>}
+                                            </div>
+
+                                            {/* Live vote progress bar / counter shown only during active vote */}
+                                            {phase === 'day_vote' && (
+                                                <div className="flex items-center gap-3 w-full mt-2 relative z-10">
+                                                    <div className="flex-1 h-1.5 bg-black/40 rounded-full overflow-hidden shadow-inner">
+                                                        <motion.div
+                                                            initial={{ width: 0 }}
+                                                            animate={{ width: `${Math.min((count / players.length) * 100, 100)}%` }}
+                                                            className={`h-full rounded-full ${isSelected ? 'bg-gradient-to-r from-yellow-400 to-orange-500' : 'bg-white/30'}`}
+                                                        />
+                                                    </div>
+                                                    <span className={`text-xs font-bold leading-none ${isSelected ? 'text-yellow-400' : 'text-white/40'}`}>{count} vote{count > 1 ? 's' : ''}</span>
+                                                </div>
+                                            )}
+                                        </motion.button>
+                                    )
+                                })}
                             </div>
                             <motion.button whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.97 }}
                                 onClick={handleVote} disabled={!selectedTarget}
                                 className="w-full py-4 rounded-2xl bg-gradient-to-r from-yellow-600 to-orange-600 hover:from-yellow-500 hover:to-orange-500 text-white font-black uppercase tracking-widest shadow-[0_0_25px_rgba(245,158,11,0.4)] disabled:opacity-50 disabled:grayscale transition-all text-lg"
                             >
-                                Voter
+                                {isRevote ? 'Confirmer le revote' : 'Voter'}
                             </motion.button>
                         </div>
                     )}
@@ -627,7 +668,7 @@ const ChatBox = ({ roomId, players, currentPlayerId, phase }) => {
         if (!roomId) return
 
         const fetchMessages = async () => {
-            const { data } = await supabase
+            const { data } = await getSupabase()
                 .from('chat_messages')
                 .select('*')
                 .eq('room_id', roomId)
@@ -769,6 +810,7 @@ export default function GameRoom({ roomId }) {
     const [roleAcknowledged, setRoleAcknowledged] = useState(false)
     const [events, setEvents] = useState([])
     const [detectiveOwnResult, setDetectiveOwnResult] = useState(null)
+    const [voteCounts, setVoteCounts] = useState({})
 
     // Keep me in sync with players list
     const meRef = useRef(null)
@@ -813,10 +855,19 @@ export default function GameRoom({ roomId }) {
                     setDetectiveOwnResult(payload.new.payload?.detectiveResult ?? null)
                 }
             })
+            .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'actions', filter: `room_id=eq.${roomId}` }, (payload) => {
+                // Live vote tallying
+                if (payload.new.action_type === 'vote' && payload.new.phase_number === room?.phase_number && payload.new.revote_round === room?.revote_round) {
+                    setVoteCounts(prev => ({
+                        ...prev,
+                        [payload.new.target_id]: (prev[payload.new.target_id] || 0) + 1
+                    }))
+                }
+            })
             .subscribe()
 
         return () => getSupabase().removeChannel(channel)
-    }, [roomId])
+    }, [roomId, room?.phase_number, room?.revote_round])
 
     // ── Handlers ──
     const handleJoinLobby = async (username) => {
@@ -949,6 +1000,8 @@ export default function GameRoom({ roomId }) {
                     events={events}
                     playerRole={me.role}
                     detectiveOwnResult={detectiveOwnResult}
+                    room={room}
+                    voteCounts={voteCounts}
                 />
             )
         }

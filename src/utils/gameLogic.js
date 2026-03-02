@@ -140,13 +140,16 @@ export function resolveNightActions(actions, players) {
 /**
  * Tally votes and find who should be eliminated.
  * The player with the MOST votes is eliminated.
- * Ties result in no elimination (null).
+ * On a tie, returns the IDs of all tied players so a revote can be started.
  *
  * @param {Array} votes - actions with action_type='vote': [{target_id}]
- * @returns {string|null} - id of eliminated player, or null if tie
+ * @returns {{ winner: string|null, tiedIds: string[], counts: Record<string,number> }}
+ *   - winner: id of player to eliminate, or null if tied
+ *   - tiedIds: ids of all players sharing the highest vote count (empty when winner is set)
+ *   - counts: vote count per target id
  */
 export function tallyVotes(votes) {
-    if (!votes || votes.length === 0) return null
+    if (!votes || votes.length === 0) return { winner: null, tiedIds: [], counts: {} }
 
     const counts = {}
     for (const v of votes) {
@@ -154,20 +157,20 @@ export function tallyVotes(votes) {
     }
 
     let maxVotes = 0
-    let winner = null
-    let tied = false
-
-    for (const [id, count] of Object.entries(counts)) {
-        if (count > maxVotes) {
-            maxVotes = count
-            winner = id
-            tied = false
-        } else if (count === maxVotes) {
-            tied = true
-        }
+    for (const count of Object.values(counts)) {
+        if (count > maxVotes) maxVotes = count
     }
 
-    return tied ? null : winner
+    const topIds = Object.entries(counts)
+        .filter(([, count]) => count === maxVotes)
+        .map(([id]) => id)
+
+    if (topIds.length === 1) {
+        return { winner: topIds[0], tiedIds: [], counts }
+    }
+
+    // Tie — return all tied player IDs
+    return { winner: null, tiedIds: topIds, counts }
 }
 
 /**

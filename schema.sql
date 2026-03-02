@@ -8,7 +8,9 @@ CREATE TABLE IF NOT EXISTS rooms (
   status TEXT NOT NULL DEFAULT 'lobby', -- lobby | roles | night_mafia | night_doctor | night_detective | day_discussion | day_vote | game_over
   host_id TEXT,
   phase_number INTEGER NOT NULL DEFAULT 0, -- increments each full night+day cycle
-  winner TEXT -- 'mafia' | 'village' | NULL
+  winner TEXT, -- 'mafia' | 'village' | NULL
+  revote_candidates JSONB DEFAULT NULL, -- array of player UUIDs eligible during a revote
+  revote_round INTEGER NOT NULL DEFAULT 0  -- increments each tie within the same day_vote phase
 );
 
 -- 2. Table Players
@@ -33,7 +35,8 @@ CREATE TABLE IF NOT EXISTS actions (
   phase_number INTEGER NOT NULL,
   action_type TEXT NOT NULL, -- kill | save | check | vote
   actor_id UUID REFERENCES players(id) ON DELETE CASCADE,
-  target_id UUID REFERENCES players(id) ON DELETE CASCADE
+  target_id UUID REFERENCES players(id) ON DELETE CASCADE,
+  revote_round INTEGER NOT NULL DEFAULT 0 -- matches rooms.revote_round to scope votes per revote round
 );
 
 -- 4. Table Game Events (broadcast announcements to all players)
