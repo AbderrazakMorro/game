@@ -654,6 +654,7 @@ const ChatBox = ({ roomId, players, currentPlayerId, phase }) => {
     const [messages, setMessages] = useState([])
     const [newMessage, setNewMessage] = useState('')
     const [isOpen, setIsOpen] = useState(false)
+    const [activeTab, setActiveTab] = useState('village') // 'village' or 'mafia'
     const messagesEndRef = useRef(null)
 
     const scrollToBottom = () => {
@@ -698,13 +699,28 @@ const ChatBox = ({ roomId, players, currentPlayerId, phase }) => {
         await getSupabase().from('chat_messages').insert([{
             room_id: roomId,
             player_id: currentPlayerId,
-            content
+            content,
+            is_mafia_chat: activeTab === 'mafia'
         }])
     }
 
     const currentPlayer = players.find(p => p.id === currentPlayerId)
     // Everybody can see chat, but only alive players (or players in lobby/game over) can send
     const canSend = currentPlayer && (currentPlayer.is_alive || phase === 'lobby' || phase === 'game_over')
+
+    // Mafia logic
+    const aliveMafias = players.filter(p => p.role === 'mafia' && p.is_alive).length
+    const isNight = phase.startsWith('night')
+    const isAliveMafia = currentPlayer && currentPlayer.role === 'mafia' && currentPlayer.is_alive
+    const canSeeMafiaChat = isNight && isAliveMafia && aliveMafias >= 2
+
+    useEffect(() => {
+        if (!canSeeMafiaChat && activeTab === 'mafia') {
+            setActiveTab('village')
+        }
+    }, [canSeeMafiaChat, activeTab])
+
+    const visibleMessages = messages.filter(msg => activeTab === 'mafia' ? msg.is_mafia_chat : !msg.is_mafia_chat)
 
     return (
         <div className="fixed bottom-6 right-6 z-50 flex flex-col items-end pointer-events-none font-sans">
@@ -716,38 +732,63 @@ const ChatBox = ({ roomId, players, currentPlayerId, phase }) => {
                         animate={{ opacity: 1, y: 0, scale: 1 }}
                         exit={{ opacity: 0, y: 20, scale: 0.95 }}
                         transition={{ duration: 0.3, type: "spring", stiffness: 250, damping: 25 }}
-                        className="bg-black/60 backdrop-blur-3xl border border-white/20 rounded-[2rem] shadow-[0_8px_40px_rgba(0,0,0,0.6)] w-[340px] h-[450px] flex flex-col overflow-hidden pointer-events-auto origin-bottom-right absolute bottom-20 right-0 mb-2"
+                        className="bg-black/60 backdrop-blur-3xl border border-white/20 rounded-[2rem] shadow-[0_8px_40px_rgba(0,0,0,0.6)] w-[calc(100vw-3rem)] sm:w-[380px] h-[60vh] min-h-[400px] max-h-[600px] flex flex-col overflow-hidden pointer-events-auto origin-bottom-right absolute bottom-20 right-0 mb-2"
                     >
                         <div className="absolute inset-0 bg-gradient-to-b from-white/5 to-transparent pointer-events-none" />
 
-                        <div className="bg-white/5 backdrop-blur-md px-5 py-4 border-b border-white/10 flex justify-between items-center shrink-0 relative z-10">
-                            <h3 className="text-white font-bold text-sm flex items-center gap-3 uppercase tracking-widest">
-                                <span className="w-2.5 h-2.5 rounded-full bg-green-500 animate-pulse shadow-[0_0_10px_rgba(34,197,94,0.8)]" />
-                                Chat Live
-                            </h3>
-                            <button onClick={() => setIsOpen(false)} className="text-white/50 hover:text-white hover:bg-white/10 p-1.5 rounded-full transition-all">
-                                ✕
-                            </button>
+                        <div className="bg-white/5 backdrop-blur-md px-4 py-3 border-b border-white/10 flex flex-col gap-2 shrink-0 relative z-10">
+                            <div className="flex justify-between items-center w-full">
+                                <h3 className="text-white font-bold text-sm flex items-center gap-2 uppercase tracking-widest">
+                                    <span className="w-2.5 h-2.5 rounded-full bg-green-500 animate-pulse shadow-[0_0_10px_rgba(34,197,94,0.8)]" />
+                                    Discussion 🗣️
+                                </h3>
+                                <button onClick={() => setIsOpen(false)} className="text-white/50 hover:text-white hover:bg-white/10 p-1.5 rounded-full transition-all text-sm">
+                                    ❌
+                                </button>
+                            </div>
+                            {canSeeMafiaChat && (
+                                <div className="flex bg-black/40 rounded-lg p-1 gap-1 mt-1">
+                                    <button
+                                        onClick={() => setActiveTab('village')}
+                                        className={`flex-1 py-1.5 text-[10px] font-bold uppercase tracking-wider rounded-md transition-all flex items-center justify-center gap-1 ${activeTab === 'village' ? 'bg-white/20 text-white' : 'text-white/40 hover:text-white/70'}`}
+                                    >
+                                        <span className="text-xs">🏡</span> Village
+                                    </button>
+                                    <button
+                                        onClick={() => setActiveTab('mafia')}
+                                        className={`flex-1 py-1.5 text-[10px] font-bold uppercase tracking-wider rounded-md transition-all flex items-center justify-center gap-1 ${activeTab === 'mafia' ? 'bg-red-500/40 text-red-100' : 'text-red-500/40 hover:text-red-400'}`}
+                                    >
+                                        <span className="text-xs">🔪</span> Mafia
+                                    </button>
+                                </div>
+                            )}
                         </div>
 
                         <div className="flex-1 overflow-y-auto p-5 space-y-4 custom-scrollbar flex flex-col relative z-10 w-full">
-                            {messages.length === 0 ? (
-                                <p className="text-white/30 italic text-sm text-center my-auto font-medium">Rejoignez la conversation...</p>
+                            {visibleMessages.length === 0 ? (
+                                <p className="text-white/30 italic text-sm text-center my-auto font-medium">L'ambiance est calme... Parlez ! 🎤</p>
                             ) : (
-                                messages.map(msg => {
+                                visibleMessages.map(msg => {
                                     const isMe = msg.player_id === currentPlayerId
                                     const author = players.find(p => p.id === msg.player_id)
                                     const authorName = author ? author.username : 'Inconnu'
                                     const roleColor = author?.role === 'mafia' ? 'text-red-400' : 'text-slate-300'
+
+                                    // Different message styling for mafia chat vs village chat
+                                    const mafiaStyles = isMe
+                                        ? 'bg-red-600/80 text-white border border-red-500/50 rounded-br-sm shadow-[0_4px_15px_rgba(220,38,38,0.3)]'
+                                        : 'bg-red-900/30 text-red-100 border border-red-500/20 rounded-bl-sm backdrop-blur-md'
+
+                                    const villageStyles = isMe
+                                        ? 'bg-gradient-to-r from-purple-600 to-blue-600 text-white rounded-br-sm border border-white/20 shadow-[0_4px_15px_rgba(147,51,234,0.3)]'
+                                        : 'bg-white/10 text-slate-100 border border-white/10 rounded-bl-sm backdrop-blur-md'
+
                                     return (
                                         <div key={msg.id} className={`flex flex-col ${isMe ? 'items-end' : 'items-start'} max-w-full`}>
                                             <span className={`text-[10px] uppercase font-bold tracking-widest mb-1 px-1 ${isMe ? 'text-white/40' : roleColor}`}>
                                                 {authorName} {!author?.is_alive && '💀'}
                                             </span>
-                                            <div className={`px-4 py-2.5 rounded-2xl text-[13px] font-medium max-w-[85%] break-words shadow-md ${isMe
-                                                ? 'bg-gradient-to-r from-purple-600 to-blue-600 text-white rounded-br-sm border border-white/20 shadow-[0_4px_15px_rgba(147,51,234,0.3)]'
-                                                : 'bg-white/10 text-slate-100 border border-white/10 rounded-bl-sm backdrop-blur-md'
-                                                }`}>
+                                            <div className={`px-4 py-2.5 rounded-2xl text-[13px] font-medium max-w-[85%] break-words shadow-md ${activeTab === 'mafia' ? mafiaStyles : villageStyles}`}>
                                                 {msg.content}
                                             </div>
                                         </div>
@@ -763,17 +804,17 @@ const ChatBox = ({ roomId, players, currentPlayerId, phase }) => {
                                     type="text"
                                     value={newMessage}
                                     onChange={e => setNewMessage(e.target.value)}
-                                    placeholder="Message..."
+                                    placeholder={activeTab === 'mafia' ? "Chuchutez un plan... 🤫" : "Dites quelque chose... ✍️"}
                                     maxLength={120}
                                     className="flex-1 bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm font-medium text-white placeholder:text-white/30 focus:outline-none focus:border-purple-500/50 focus:ring-1 focus:ring-purple-500/50 transition-all backdrop-blur-md"
                                 />
-                                <button type="submit" disabled={!newMessage.trim()} className="bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-500 hover:to-blue-500 disabled:opacity-50 disabled:grayscale text-white px-4 rounded-xl transition-all shadow-[0_0_15px_rgba(147,51,234,0.3)] flex items-center justify-center font-bold">
-                                    ➤
+                                <button type="submit" disabled={!newMessage.trim()} className={`${activeTab === 'mafia' ? 'bg-gradient-to-r from-red-600 to-red-500 shadow-[0_0_15px_rgba(220,38,38,0.3)] hover:from-red-500 hover:to-red-400' : 'bg-gradient-to-r from-purple-600 to-blue-600 shadow-[0_0_15px_rgba(147,51,234,0.3)] hover:from-purple-500 hover:to-blue-500'} disabled:opacity-50 disabled:grayscale text-white px-4 rounded-xl transition-all flex items-center justify-center font-bold text-lg`}>
+                                    🚀
                                 </button>
                             </form>
                         ) : (
                             <div className="p-4 bg-black/40 border-t border-white/10 text-center shrink-0 relative z-10">
-                                <p className="text-red-400/80 italic text-xs font-bold uppercase tracking-widest">Les morts ne parlent pas...</p>
+                                <p className="text-red-400/80 italic text-xs font-bold uppercase tracking-widest">Les morts ne parlent pas... 👻</p>
                             </div>
                         )}
                     </motion.div>

@@ -55,7 +55,8 @@ CREATE TABLE IF NOT EXISTS chat_messages (
   created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
   room_id UUID REFERENCES rooms(id) ON DELETE CASCADE,
   player_id TEXT NOT NULL,
-  content TEXT NOT NULL
+  content TEXT NOT NULL,
+  is_mafia_chat BOOLEAN DEFAULT false
 );
 
 -- Activation de Realtime
