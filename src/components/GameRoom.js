@@ -4,6 +4,8 @@ import React, { useState, useEffect, useRef, useCallback } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { getSupabase } from '../lib/supabase'
 import { getMafiaCount } from '../utils/gameLogic'
+import { getCookieConsent, getSessionCookie, setSessionCookie } from '../utils/cookieUtils'
+import CookieConsentBanner from './CookieConsentBanner'
 
 // ─────────────────────────────────────────────
 // Helpers
@@ -852,6 +854,7 @@ export default function GameRoom({ roomId }) {
     const [events, setEvents] = useState([])
     const [detectiveOwnResult, setDetectiveOwnResult] = useState(null)
     const [voteCounts, setVoteCounts] = useState({})
+    const [consentGranted, setConsentGranted] = useState(false)
 
     // Keep me in sync with players list
     const meRef = useRef(null)
@@ -862,6 +865,25 @@ export default function GameRoom({ roomId }) {
         if (!roomId) return
 
         const fetchInitialData = async () => {
+            if (typeof window !== 'undefined') {
+                const consent = getCookieConsent()
+                if (consent === 'granted') {
+                    setConsentGranted(true)
+                    const cookie = getSessionCookie()
+                    if (cookie && cookie.roomId === roomId) {
+                        const { data: meData } = await getSupabase()
+                            .from('players')
+                            .select('*')
+                            .eq('room_id', roomId)
+                            .eq('user_id', cookie.userId)
+                            .single()
+                        if (meData) {
+                            setMe(meData)
+                        }
+                    }
+                }
+            }
+
             const { data: roomData } = await getSupabase().from('rooms').select('*').eq('id', roomId).single()
             if (roomData) { setRoom(roomData); setPhase(roomData.status) }
 
@@ -911,6 +933,17 @@ export default function GameRoom({ roomId }) {
     }, [roomId, room?.phase_number, room?.revote_round])
 
     // ── Handlers ──
+    const handleConsentChange = (status) => {
+        if (status === 'granted') {
+            setConsentGranted(true)
+            if (meRef.current) {
+                setSessionCookie({ userId: meRef.current.user_id, roomId })
+            }
+        } else {
+            setConsentGranted(false)
+        }
+    }
+
     const handleJoinLobby = async (username) => {
         if (room && room.status !== 'lobby') return
         const mockUserId = 'user_' + Math.random().toString(36).substr(2, 9)
@@ -921,7 +954,12 @@ export default function GameRoom({ roomId }) {
             room_id: roomId, user_id: mockUserId, username,
             is_alive: true, is_protected: false, role: 'villager', is_ready: false,
         }]).select().single()
-        if (data) setMe(data)
+        if (data) {
+            setMe(data)
+            if (consentGranted) {
+                setSessionCookie({ userId: mockUserId, roomId })
+            }
+        }
     }
 
     const handleStartGame = async () => {
@@ -1060,6 +1098,7 @@ export default function GameRoom({ roomId }) {
         <>
             {renderPhase()}
             {me && phase !== 'roles' && <ChatBox roomId={roomId} players={players} currentPlayerId={me.id} phase={phase} />}
+            <CookieConsentBanner onConsentChange={handleConsentChange} />
         </>
     )
 }
