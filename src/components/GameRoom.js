@@ -8,6 +8,7 @@ import { getCookieConsent, getSessionCookie, setSessionCookie } from '../utils/c
 import CookieConsentBanner from './CookieConsentBanner'
 import { useVoiceRoom } from '../hooks/useVoiceRoom'
 import { useMediaDevices } from '../hooks/useMediaDevices'
+import { useMicrophone } from '../hooks/useMicrophone'
 
 
 // ─────────────────────────────────────────────
@@ -65,7 +66,7 @@ const CopyBadge = ({ text }) => {
 // ─────────────────────────────────────────────
 // LOBBY
 // ─────────────────────────────────────────────
-const Lobby = ({ room, players, isHost, onStart, onJoin, currentUserId }) => {
+const Lobby = ({ room, players, isHost, onStart, onJoin, currentUserId, speakingStates, voiceParticipants }) => {
     const [username, setUsername] = useState('')
     const [joining, setJoining] = useState(false)
     const alreadyJoined = !!currentUserId
@@ -155,25 +156,77 @@ const Lobby = ({ room, players, isHost, onStart, onJoin, currentUserId }) => {
                     {/* Players list */}
                     <div className="bg-white/5 backdrop-blur-2xl border border-white/10 rounded-[2rem] p-8 shadow-[0_8px_32px_0_rgba(0,0,0,0.36)] flex flex-col relative overflow-hidden">
                         <div className="absolute inset-0 bg-gradient-to-b from-white/5 to-transparent pointer-events-none" />
-                        <h3 className="text-sm text-purple-200/50 font-bold uppercase tracking-widest mb-6 flex items-center gap-3 relative z-10">
-                            <span className="w-2.5 h-2.5 bg-green-500 rounded-full animate-pulse shadow-[0_0_10px_rgba(34,197,94,0.8)]" />
-                            Joueurs présents ({players.length})
-                        </h3>
+                        <div className="flex items-center justify-between mb-6 relative z-10 w-full">
+                            <h3 className="text-sm text-purple-200/50 font-bold uppercase tracking-widest flex items-center gap-3">
+                                <span className="w-2.5 h-2.5 bg-green-500 rounded-full animate-pulse shadow-[0_0_10px_rgba(34,197,94,0.8)]" />
+                                Joueurs présents ({players.length})
+                            </h3>
+                            {isHost && players.length > 1 && (
+                                <button
+                                    onClick={async () => {
+                                        // Master mute everyone except the host
+                                        const otherIds = players.filter(p => p.user_id !== currentUserId).map(p => p.id)
+                                        if (otherIds.length > 0) {
+                                            await getSupabase().from('voice_participants').update({ is_muted: true }).in('player_id', otherIds)
+                                        }
+                                    }}
+                                    className="text-[10px] uppercase font-bold tracking-widest bg-red-500/20 text-red-400 border border-red-500/30 hover:bg-red-500/40 px-3 py-1.5 rounded-lg transition-all"
+                                >
+                                    Silence Général 🔇
+                                </button>
+                            )}
+                        </div>
                         <ul className="flex-1 space-y-3 overflow-y-auto max-h-72 pr-2 custom-scrollbar relative z-10">
                             <AnimatePresence>
-                                {players.map((p, i) => (
-                                    <motion.li key={p.id}
-                                        initial={{ opacity: 0, x: -12 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: 12 }}
-                                        className={`flex items-center gap-4 px-4 py-3 rounded-2xl border ${p.user_id === currentUserId ? 'bg-purple-600/20 border-purple-500/50 text-white shadow-[0_0_15px_rgba(168,85,247,0.3)]' : 'bg-black/40 border-white/10 text-slate-200'}`}
-                                    >
-                                        <div className={`w-10 h-10 rounded-full flex items-center justify-center text-lg font-black shadow-inner ${p.user_id === currentUserId ? 'bg-gradient-to-br from-purple-500 to-red-500 text-white' : 'bg-gradient-to-br from-slate-700 to-slate-900 text-slate-400'}`}>
-                                            {p.username[0].toUpperCase()}
-                                        </div>
-                                        <span className="flex-1 font-bold text-base tracking-wide">{p.username}</span>
-                                        {i === 0 && <span className="text-[10px] uppercase font-black tracking-widest bg-yellow-500/20 text-yellow-400 border border-yellow-500/30 px-3 py-1 rounded-full">Hôte</span>}
-                                        {p.user_id === currentUserId && i !== 0 && <span className="text-[10px] uppercase font-bold tracking-widest text-purple-300/70 border border-purple-500/30 rounded-full px-3 py-1">Vous</span>}
-                                    </motion.li>
-                                ))}
+                                {players.map((p, i) => {
+                                    const vParticipant = voiceParticipants?.find(vp => vp.player_id === p.id)
+                                    const isMuted = vParticipant ? vParticipant.is_muted : false
+                                    const isSpeaking = speakingStates?.[p.id] || false
+
+                                    return (
+                                        <motion.li key={p.id}
+                                            initial={{ opacity: 0, x: -12 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: 12 }}
+                                            className={`flex items-center gap-4 px-4 py-3 rounded-2xl border ${p.user_id === currentUserId ? 'bg-purple-600/20 border-purple-500/50 text-white shadow-[0_0_15px_rgba(168,85,247,0.3)]' : 'bg-black/40 border-white/10 text-slate-200'}`}
+                                        >
+                                            <div className={`relative w-10 h-10 rounded-full flex items-center justify-center text-lg font-black shadow-inner object-cover transition-all ${p.user_id === currentUserId ? 'bg-gradient-to-br from-purple-500 to-red-500 text-white' : 'bg-gradient-to-br from-slate-700 to-slate-900 text-slate-400'} ${isSpeaking ? 'ring-2 ring-green-500 ring-offset-2 ring-offset-slate-900' : ''}`}>
+                                                {p.username[0].toUpperCase()}
+
+                                                {/* Voice Indicator Badge */}
+                                                <div className="absolute -bottom-1 -right-1 bg-slate-900 rounded-full p-0.5 border border-slate-700 z-20">
+                                                    {isMuted ? (
+                                                        <span className="text-[10px] grayscale opacity-60 flex items-center justify-center w-3 h-3">🔇</span>
+                                                    ) : isSpeaking ? (
+                                                        <span className="text-[10px] animate-pulse flex items-center justify-center w-3 h-3 text-green-500">🔊</span>
+                                                    ) : (
+                                                        <span className="text-[10px] opacity-40 flex items-center justify-center w-3 h-3 text-slate-400">🎤</span>
+                                                    )}
+                                                </div>
+                                            </div>
+                                            <div className="flex-1 flex flex-col">
+                                                <span className="font-bold text-base tracking-wide flex items-center gap-2">
+                                                    {p.username}
+                                                    {i === 0 && <span className="text-[10px] uppercase font-black tracking-widest bg-yellow-500/20 text-yellow-400 border border-yellow-500/30 px-2 py-0.5 rounded-full">Hôte</span>}
+                                                    {p.user_id === currentUserId && i !== 0 && <span className="text-[10px] uppercase font-bold tracking-widest text-purple-300/70 border border-purple-500/30 rounded-full px-2 py-0.5">Vous</span>}
+                                                </span>
+                                            </div>
+
+                                            {/* Host Controls */}
+                                            {isHost && p.user_id !== currentUserId && (
+                                                <button
+                                                    onClick={async () => {
+                                                        const targetIsMuted = voiceParticipants?.find(vp => vp.player_id === p.id)?.is_muted
+                                                        await getSupabase().from('voice_participants').update({ is_muted: !targetIsMuted }).eq('player_id', p.id)
+                                                    }}
+                                                    className={`p-2 rounded-xl border transition-all ${isMuted ? 'bg-red-500/20 border-red-500/50 text-red-500 hover:bg-red-500/40' : 'bg-white/5 border-white/10 text-white/50 hover:bg-white/10 hover:text-white'}`}
+                                                    title={isMuted ? "Rétablir le son" : "Rendre muet"}
+                                                >
+                                                    {isMuted ? '🔇' : '🎤'}
+                                                </button>
+                                            )}
+
+                                        </motion.li>
+                                    )
+                                })}
                             </AnimatePresence>
                             {players.length === 0 && <li className="text-white/30 text-sm font-medium text-center py-8">La salle est vide...</li>}
                         </ul>
@@ -416,7 +469,7 @@ const NightOverlay = ({ playerRole, players, currentPhase, currentUserId, onActi
 // ─────────────────────────────────────────────
 // DAY PHASE (Announcement + Voting)
 // ─────────────────────────────────────────────
-const DayPhase = ({ players, currentUserId, onVote, phase, events, playerRole, detectiveOwnResult, room, voteCounts }) => {
+const DayPhase = ({ players, currentUserId, onVote, phase, events, playerRole, detectiveOwnResult, room, voteCounts, speakingStates, voiceParticipants }) => {
     const [selectedTarget, setSelectedTarget] = useState(null)
     const [voted, setVoted] = useState(false)
     const living = players.filter(p => p.is_alive)
@@ -528,8 +581,19 @@ const DayPhase = ({ players, currentUserId, onVote, phase, events, playerRole, d
                                                 : 'border-white/10 bg-black/40 text-slate-300 hover:border-white/30 hover:bg-white/5'}`}
                                         >
                                             <div className="flex w-full items-center gap-4 relative z-10">
-                                                <div className={`w-10 h-10 rounded-full flex items-center justify-center text-base font-black shadow-inner shrink-0 ${isSelected ? 'bg-gradient-to-br from-yellow-400 to-orange-500 text-white' : 'bg-slate-800 text-yellow-500/70'}`}>
+                                                <div className={`relative w-10 h-10 rounded-full flex items-center justify-center text-base font-black shadow-inner shrink-0 transition-all ${isSelected ? 'bg-gradient-to-br from-yellow-400 to-orange-500 text-white' : 'bg-slate-800 text-yellow-500/70'} ${speakingStates?.[p.id] ? 'ring-2 ring-green-500 ring-offset-2 ring-offset-slate-900' : ''}`}>
                                                     {p.username[0].toUpperCase()}
+
+                                                    {/* Voice Indicator Badge */}
+                                                    <div className="absolute -bottom-1 -right-1 bg-slate-900 rounded-full p-0.5 border border-slate-700 z-20">
+                                                        {voiceParticipants?.find(vp => vp.player_id === p.id)?.is_muted ? (
+                                                            <span className="text-[10px] grayscale opacity-60 flex items-center justify-center w-3 h-3">🔇</span>
+                                                        ) : speakingStates?.[p.id] ? (
+                                                            <span className="text-[10px] animate-pulse flex items-center justify-center w-3 h-3 text-green-500">🔊</span>
+                                                        ) : (
+                                                            <span className="text-[10px] opacity-40 flex items-center justify-center w-3 h-3 text-slate-400">🎤</span>
+                                                        )}
+                                                    </div>
                                                 </div>
                                                 <span className="font-bold text-base truncate flex-1 text-left">{p.username}</span>
                                                 {p.user_id === currentUserId && <span className="ml-auto text-[10px] uppercase font-bold text-white/40 tracking-widest bg-white/5 px-2 py-1 rounded-full shrink-0">Vous</span>}
@@ -862,14 +926,16 @@ export default function GameRoom({ roomId }) {
 
 
     // Voice Room Logic
-    const { stream: localStream, getMicrophone } = useMediaDevices()
+    const { stream: localStream, getMicrophone, isMuted: localIsMuted, isSpeaking: localIsSpeaking, toggleMute, setMuted } = useMicrophone()
     const voiceRoom = useVoiceRoom({
         roomId,
         playerId: me?.id,
         roomStatus: phase,
         playerRole: me?.role,
         isAlive: me?.is_alive,
-        localStream
+        localStream,
+        localIsMuted,
+        localIsSpeaking
     })
 
 
@@ -887,7 +953,7 @@ export default function GameRoom({ roomId }) {
                 if (consent === 'granted') {
                     setConsentGranted(true)
                     const cookie = getSessionCookie()
-                    // Sync with new cookie schema: playerId, roomCode
+                    // Sync with new cookie schema: playerId, roomCode, micPreference
                     if (cookie && cookie.roomCode === roomData?.code) {
                         const { data: meData } = await getSupabase()
                             .from('players')
@@ -897,11 +963,17 @@ export default function GameRoom({ roomId }) {
                             .maybeSingle()
                         if (meData) {
                             setMe(meData)
+
+                            // Restore Mute Preference
+                            if (cookie.micPreference === 'muted') {
+                                setMuted(true)
+                            } else {
+                                setMuted(false)
+                            }
                             getMicrophone()
                         }
                     }
                 }
-
             }
 
             const { data: roomData } = await getSupabase().from('rooms').select('*').eq('id', roomId).single()
@@ -1063,6 +1135,8 @@ export default function GameRoom({ roomId }) {
                     room={room} players={players} isHost={isHost}
                     onStart={handleStartGame} onJoin={handleJoinLobby}
                     currentUserId={me?.user_id}
+                    speakingStates={voiceRoom.remoteSpeakingStates}
+                    voiceParticipants={voiceRoom.participants}
                 />
             )
         }
@@ -1121,6 +1195,8 @@ export default function GameRoom({ roomId }) {
                     detectiveOwnResult={detectiveOwnResult}
                     room={room}
                     voteCounts={voteCounts}
+                    speakingStates={voiceRoom.remoteSpeakingStates}
+                    voiceParticipants={voiceRoom.participants}
                 />
             )
         }
@@ -1144,10 +1220,16 @@ export default function GameRoom({ roomId }) {
                     <motion.button
                         whileHover={{ scale: 1.05 }}
                         whileTap={{ scale: 0.95 }}
-                        onClick={voiceRoom.toggleMute}
-                        className={`w-14 h-14 rounded-2xl flex items-center justify-center shadow-2xl border transition-all ${voiceRoom.isMuted ? 'bg-red-600/20 border-red-500/50 text-red-500' : 'bg-white/10 border-white/20 text-white hover:bg-white/20'}`}
+                        onClick={() => {
+                            toggleMute();
+                            if (consentGranted && room) {
+                                // Save preference
+                                setSessionCookie({ playerId: me.id, roomCode: room.code, micPreference: !localIsMuted ? 'muted' : 'unmuted' })
+                            }
+                        }}
+                        className={`w-14 h-14 rounded-2xl flex items-center justify-center shadow-2xl border transition-all ${localIsMuted ? 'bg-red-600/20 border-red-500/50 text-red-500' : 'bg-white/10 border-white/20 text-white hover:bg-white/20'}`}
                     >
-                        <span className="text-xl">{voiceRoom.isMuted ? '🔇' : '🎤'}</span>
+                        <span className="text-xl">{localIsMuted ? '🔇' : '🎤'}</span>
                     </motion.button>
                 </div>
             )}

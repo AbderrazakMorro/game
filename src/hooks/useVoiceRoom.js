@@ -10,11 +10,11 @@ const ICE_SERVERS = [
     }
 ]
 
-export function useVoiceRoom({ roomId, playerId, roomStatus, playerRole, isAlive, localStream }) {
+export function useVoiceRoom({ roomId, playerId, roomStatus, playerRole, isAlive, localStream, localIsMuted, localIsSpeaking }) {
     const [participants, setParticipants] = useState([])
     const [remoteStreams, setRemoteStreams] = useState({}) // { playerId: MediaStream }
     const [isConnected, setIsConnected] = useState(false)
-    const [isMuted, setIsMuted] = useState(false)
+    const [remoteSpeakingStates, setRemoteSpeakingStates] = useState({}) // { playerId: boolean }
 
     const peerConnections = useRef({}) // { remotePlayerId: RTCPeerConnection }
     const channelRef = useRef(null)
@@ -125,7 +125,7 @@ export function useVoiceRoom({ roomId, playerId, roomStatus, playerRole, isAlive
                 voice_room_id: currentVoiceRoomId,
                 player_id: playerId,
                 is_connected: true,
-                is_muted: isMuted
+                is_muted: localIsMuted
             }, { onConflict: 'voice_room_id,player_id' })
 
         // 4. Setup Signaling Channel
@@ -175,8 +175,40 @@ export function useVoiceRoom({ roomId, playerId, roomStatus, playerRole, isAlive
             createPeerConnection(payload.from, true)
         })
 
+        channel.on('broadcast', { event: 'speaking-state' }, ({ payload }) => {
+            setRemoteSpeakingStates(prev => ({
+                ...prev,
+                [payload.from]: payload.isSpeaking
+            }))
+        })
+
+        // Also subscribe to Postgres changes for voice_participants to track remote mutes
+        channel.on('postgres_changes',
+            { event: 'UPDATE', schema: 'public', table: 'voice_participants', filter: `voice_room_id=eq.${currentVoiceRoomId}` },
+            (payload) => {
+                setParticipants(prev => {
+                    const idx = prev.findIndex(p => p.player_id === payload.new.player_id)
+                    if (idx >= 0) {
+                        const newParticipants = [...prev]
+                        newParticipants[idx] = payload.new
+                        return newParticipants
+                    }
+                    return [...prev, payload.new]
+                })
+            }
+        )
+
         channelRef.current = channel
-    }, [roomId, playerId, isMuted, createPeerConnection, cleanupPeer])
+
+        // Fetch initial participants
+        supabase.from('voice_participants')
+            .select('*')
+            .eq('voice_room_id', currentVoiceRoomId)
+            .then(({ data }) => {
+                if (data) setParticipants(data)
+            })
+
+    }, [roomId, playerId, localIsMuted, createPeerConnection, cleanupPeer])
 
     // Routing Logic based on roomStatus and playerRole
     useEffect(() => {
@@ -191,12 +223,6 @@ export function useVoiceRoom({ roomId, playerId, roomStatus, playerRole, isAlive
         // Logic sync: night_mafia -> mafia-only voice room
         const isNightMafia = roomStatus === 'night_mafia'
         const targetType = (isNightMafia && playerRole === 'mafia') ? 'mafia' : 'global'
-
-        if (isNightMafia && playerRole !== 'mafia') {
-            setIsMuted(true)
-        } else {
-            setIsMuted(false)
-        }
 
         joinVoiceRoom(targetType)
 
@@ -213,27 +239,36 @@ export function useVoiceRoom({ roomId, playerId, roomStatus, playerRole, isAlive
         }
     }, [roomStatus, playerRole, isAlive, roomId, playerId, joinVoiceRoom, cleanupPeer])
 
-    const toggleMute = useCallback(async () => {
-        const nextMuted = !isMuted
-        setIsMuted(nextMuted)
-        if (localStream) {
-            localStream.getAudioTracks().forEach(track => {
-                track.enabled = !nextMuted
-            })
-        }
-        // Sync with DB
+    const syncMuteToDb = useCallback(async (isMutedValue) => {
         if (voiceRoomIdRef.current) {
             await supabase
                 .from('voice_participants')
-                .update({ is_muted: nextMuted })
+                .update({ is_muted: isMutedValue })
                 .match({ voice_room_id: voiceRoomIdRef.current, player_id: playerId })
         }
-    }, [isMuted, playerId, localStream])
+    }, [playerId])
 
+    // Broadcast high-frequency speaking state to other peers
+    useEffect(() => {
+        if (channelRef.current && isConnected) {
+            channelRef.current.send({
+                type: 'broadcast',
+                event: 'speaking-state',
+                payload: {
+                    from: playerId,
+                    isSpeaking: localIsSpeaking
+                }
+            })
+        }
+    }, [localIsSpeaking, isConnected, playerId])
+
+    // When the local mute state (controlled by useMicrophone) changes, sync it to the DB
+    useEffect(() => {
+        syncMuteToDb(localIsMuted)
+    }, [localIsMuted, syncMuteToDb])
     return {
         isConnected,
-        isMuted,
-        toggleMute,
+        remoteSpeakingStates,
         remoteStreams,
         participants
     }
