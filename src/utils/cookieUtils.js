@@ -33,14 +33,14 @@ function sanitizeUserId(id) {
 /**
  * Write the session cookie.
  * Only call this AFTER the user has granted cookie consent.
- * @param {{ userId: string, roomId: string, lastJoined?: string }} data
+ * @param {{ playerId: string, roomCode: string, lastJoined?: string }} data
  */
-export function setSessionCookie({ userId, roomId, lastJoined }) {
+export function setSessionCookie({ playerId, roomCode, lastJoined }) {
     if (typeof document === 'undefined') return // SSR guard
 
     const payload = JSON.stringify({
-        userId: sanitizeUserId(userId),
-        roomId: sanitizeRoomId(roomId),
+        playerId: sanitizeUserId(playerId), // using same sanitizer
+        roomCode: sanitizeRoomId(roomCode), // using same sanitizer
         lastJoined: lastJoined ?? new Date().toISOString(),
     })
 
@@ -67,7 +67,7 @@ export function setSessionCookie({ userId, roomId, lastJoined }) {
 
 /**
  * Read and parse the session cookie.
- * @returns {{ userId: string, roomId: string, lastJoined: string } | null}
+ * @returns {{ playerId: string, roomCode: string, lastJoined: string } | null}
  */
 export function getSessionCookie() {
     if (typeof document === 'undefined') return null // SSR guard
@@ -85,13 +85,13 @@ export function getSessionCookie() {
 
         // Validate shape
         if (
-            typeof parsed.userId === 'string' &&
-            typeof parsed.roomId === 'string' &&
+            typeof parsed.playerId === 'string' &&
+            typeof parsed.roomCode === 'string' &&
             typeof parsed.lastJoined === 'string'
         ) {
             return {
-                userId: sanitizeUserId(parsed.userId),
-                roomId: sanitizeRoomId(parsed.roomId),
+                playerId: sanitizeUserId(parsed.playerId),
+                roomCode: sanitizeRoomId(parsed.roomCode),
                 lastJoined: parsed.lastJoined,
             }
         }
@@ -101,6 +101,7 @@ export function getSessionCookie() {
         return null
     }
 }
+
 
 /**
  * Delete the session cookie immediately (Max-Age=0).

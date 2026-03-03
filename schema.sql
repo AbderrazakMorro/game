@@ -59,9 +59,32 @@ CREATE TABLE IF NOT EXISTS chat_messages (
   is_mafia_chat BOOLEAN DEFAULT false
 );
 
+-- 6. Table Voice Rooms (mafia | global)
+CREATE TABLE IF NOT EXISTS voice_rooms (
+  id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
+  room_id UUID REFERENCES rooms(id) ON DELETE CASCADE,
+  type TEXT NOT NULL -- 'mafia' | 'global'
+);
+
+-- 7. Table Voice Participants (sync WebRTC state)
+CREATE TABLE IF NOT EXISTS voice_participants (
+  id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
+  voice_room_id UUID REFERENCES voice_rooms(id) ON DELETE CASCADE,
+  player_id UUID REFERENCES players(id) ON DELETE CASCADE,
+  is_connected BOOLEAN DEFAULT false,
+  is_muted BOOLEAN DEFAULT false,
+  UNIQUE(voice_room_id, player_id)
+);
+
+
 -- Activation de Realtime
 ALTER PUBLICATION supabase_realtime ADD TABLE rooms;
 ALTER PUBLICATION supabase_realtime ADD TABLE players;
 ALTER PUBLICATION supabase_realtime ADD TABLE actions;
 ALTER PUBLICATION supabase_realtime ADD TABLE game_events;
 ALTER PUBLICATION supabase_realtime ADD TABLE chat_messages;
+ALTER PUBLICATION supabase_realtime ADD TABLE voice_rooms;
+ALTER PUBLICATION supabase_realtime ADD TABLE voice_participants;
+

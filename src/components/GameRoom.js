@@ -6,6 +6,9 @@ import { getSupabase } from '../lib/supabase'
 import { getMafiaCount } from '../utils/gameLogic'
 import { getCookieConsent, getSessionCookie, setSessionCookie } from '../utils/cookieUtils'
 import CookieConsentBanner from './CookieConsentBanner'
+import { useVoiceRoom } from '../hooks/useVoiceRoom'
+import { useMediaDevices } from '../hooks/useMediaDevices'
+
 
 // ─────────────────────────────────────────────
 // Helpers
@@ -855,6 +858,20 @@ export default function GameRoom({ roomId }) {
     const [detectiveOwnResult, setDetectiveOwnResult] = useState(null)
     const [voteCounts, setVoteCounts] = useState({})
     const [consentGranted, setConsentGranted] = useState(false)
+    const [isLoading, setIsLoading] = useState(true)
+
+
+    // Voice Room Logic
+    const { stream: localStream, getMicrophone } = useMediaDevices()
+    const voiceRoom = useVoiceRoom({
+        roomId,
+        playerId: me?.id,
+        roomStatus: phase,
+        playerRole: me?.role,
+        isAlive: me?.is_alive,
+        localStream
+    })
+
 
     // Keep me in sync with players list
     const meRef = useRef(null)
@@ -870,18 +887,21 @@ export default function GameRoom({ roomId }) {
                 if (consent === 'granted') {
                     setConsentGranted(true)
                     const cookie = getSessionCookie()
-                    if (cookie && cookie.roomId === roomId) {
+                    // Sync with new cookie schema: playerId, roomCode
+                    if (cookie && cookie.roomCode === roomData?.code) {
                         const { data: meData } = await getSupabase()
                             .from('players')
                             .select('*')
                             .eq('room_id', roomId)
-                            .eq('user_id', cookie.userId)
-                            .single()
+                            .eq('id', cookie.playerId)
+                            .maybeSingle()
                         if (meData) {
                             setMe(meData)
+                            getMicrophone()
                         }
                     }
                 }
+
             }
 
             const { data: roomData } = await getSupabase().from('rooms').select('*').eq('id', roomId).single()
@@ -892,7 +912,10 @@ export default function GameRoom({ roomId }) {
 
             const { data: eventsData } = await getSupabase().from('game_events').select('*').eq('room_id', roomId).order('created_at', { ascending: true })
             if (eventsData) setEvents(eventsData)
+
+            setIsLoading(false)
         }
+
         fetchInitialData()
 
         const channel = getSupabase().channel(`game_room_${roomId}`)
@@ -936,9 +959,10 @@ export default function GameRoom({ roomId }) {
     const handleConsentChange = (status) => {
         if (status === 'granted') {
             setConsentGranted(true)
-            if (meRef.current) {
-                setSessionCookie({ userId: meRef.current.user_id, roomId })
+            if (meRef.current && room) {
+                setSessionCookie({ playerId: meRef.current.id, roomCode: room.code })
             }
+
         } else {
             setConsentGranted(false)
         }
@@ -956,9 +980,11 @@ export default function GameRoom({ roomId }) {
         }]).select().single()
         if (data) {
             setMe(data)
-            if (consentGranted) {
-                setSessionCookie({ userId: mockUserId, roomId })
+            if (consentGranted && room) {
+                setSessionCookie({ playerId: data.id, roomCode: room.code })
             }
+            getMicrophone()
+
         }
     }
 
@@ -1011,6 +1037,20 @@ export default function GameRoom({ roomId }) {
 
     // ── State machine rendering ──
     const renderPhase = () => {
+        if (isLoading) {
+            return (
+                <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center text-slate-500 font-sans relative overflow-hidden">
+                    <div className="absolute inset-0 z-0 pointer-events-none">
+                        <motion.div animate={{ scale: [1, 1.2, 1], opacity: [0.1, 0.2, 0.1] }} transition={{ duration: 8, repeat: Infinity, ease: "easeInOut" }} className="absolute top-[20%] left-[20%] w-[60%] h-[60%] bg-purple-600/20 blur-[120px] rounded-full" />
+                    </div>
+                    <div className="relative z-10 flex flex-col items-center gap-6">
+                        <div className="w-12 h-12 border-4 border-white/5 border-t-purple-500 rounded-full animate-spin" />
+                        <p className="text-purple-200/50 font-bold uppercase tracking-[0.3em] text-xs animate-pulse">Initialisation de la salle...</p>
+                    </div>
+                </div>
+            )
+        }
+
         // Game over
         if (phase === 'game_over' && room?.winner) {
             return <WinScreen winner={room.winner} players={players} />
@@ -1097,9 +1137,40 @@ export default function GameRoom({ roomId }) {
     return (
         <>
             {renderPhase()}
+
+            {/* Voice Controls */}
+            {me && phase !== 'roles' && (
+                <div className="fixed bottom-24 right-6 flex flex-col gap-3 z-50 pointer-events-auto">
+                    <motion.button
+                        whileHover={{ scale: 1.05 }}
+                        whileTap={{ scale: 0.95 }}
+                        onClick={voiceRoom.toggleMute}
+                        className={`w-14 h-14 rounded-2xl flex items-center justify-center shadow-2xl border transition-all ${voiceRoom.isMuted ? 'bg-red-600/20 border-red-500/50 text-red-500' : 'bg-white/10 border-white/20 text-white hover:bg-white/20'}`}
+                    >
+                        <span className="text-xl">{voiceRoom.isMuted ? '🔇' : '🎤'}</span>
+                    </motion.button>
+                </div>
+            )}
+
+            {/* Hidden audio elements for remote players */}
+            {Object.entries(voiceRoom.remoteStreams).map(([pid, stream]) => (
+                <AudioElement key={pid} stream={stream} />
+            ))}
+
             {me && phase !== 'roles' && <ChatBox roomId={roomId} players={players} currentPlayerId={me.id} phase={phase} />}
             <CookieConsentBanner onConsentChange={handleConsentChange} />
         </>
     )
 }
+
+function AudioElement({ stream }) {
+    const audioRef = useRef()
+    useEffect(() => {
+        if (audioRef.current && stream) {
+            audioRef.current.srcObject = stream
+        }
+    }, [stream])
+    return <audio ref={audioRef} autoPlay />
+}
+
 
